@@ -2,7 +2,23 @@ import os
 import boto3
 import watchtower, logging
 from flask import Flask
-from flask_sqlalchemy import SQLAlchemy 
+from flask_sqlalchemy import SQLAlchemy
+
+from flask import has_request_context, request
+import uuid
+
+class StructuredFormatter(watchtower.CloudWatchLogFormatter):
+   def format(self, record):
+      record.msg = {
+         'timestamp': record.created,
+         'location': record.name,
+         'message': record.msg,
+      }
+      if has_request_context():
+         record.msg['request_id'] = request.environ.get('REQUEST_ID')
+         record.msg['url'] = request.environ.get('PATH_INFO')
+         record.msg['method'] = request.environ.get('REQUEST_METHOD')
+      return super().format(record)
 
 def create_app(config_overrides=None): 
    logging.basicConfig(level=logging.INFO)
@@ -17,6 +33,21 @@ def create_app(config_overrides=None):
            log_group_name="taskoverflow",
            boto3_client=boto3.client("logs", region_name="us-east-1")
    )
+   handler.setFormatter(StructuredFormatter())
+
+   requests = logging.getLogger("requests")
+   requests.addHandler(handler)
+
+   @app.before_request
+   def before_request():
+      request.environ['REQUEST_ID'] = str(uuid.uuid4())
+      requests.info("Request started")
+
+   @app.after_request
+   def after_request(response):
+      requests.info("Request finished")
+      return response
+
    app.logger.addHandler(handler)
    logging.getLogger().addHandler(handler)
    logging.getLogger('werkzeug').addHandler(handler)
